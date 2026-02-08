@@ -4,68 +4,70 @@ from ta.trend import SMAIndicator
 class ScoringEngine:
     
     def calculate_technical(self, df):
-        if df.empty or len(df) < 200: return 50, {} 
-
+        if df.empty or len(df) < 50: return 50, {}
+        window = min(50, len(df))
         rsi = RSIIndicator(df['Close']).rsi().iloc[-1]
-        sma_50 = SMAIndicator(df['Close'], window=50).sma_indicator().iloc[-1]
-        sma_200 = SMAIndicator(df['Close'], window=200).sma_indicator().iloc[-1]
+        sma = SMAIndicator(df['Close'], window=window).sma_indicator().iloc[-1]
         price = df['Close'].iloc[-1]
-
-        rsi_score = 80 if 30 <= rsi <= 70 else 40
         
-        if price > sma_50 > sma_200: trend_score = 90
-        elif price < sma_50: trend_score = 30
-        else: trend_score = 60
-
-        final_score = (trend_score * 0.6) + (rsi_score * 0.4)
-        return final_score, {"RSI": rsi, "SMA50": sma_50, "Price": price}
+        rsi_score = 50
+        if rsi < 30: rsi_score = 80
+        elif rsi > 70: rsi_score = 30
+        
+        trend_score = 75 if price > sma else 30
+        final = (trend_score * 0.6) + (rsi_score * 0.4)
+        return final, {"RSI": rsi, "SMA": sma}
 
     def calculate_social(self, social_data):
-        if not social_data: return 50, "No Data"
+        headlines = social_data.get('headlines', [])
+        if not headlines:
+            return 50, {"summary": "No relevant news", "details": [], "counts": {"bull":0,"bear":0,"neut":0}}
 
-        reddit = social_data.get('reddit', [])
-        r_score = reddit[0]['score'] if reddit else 0
-        r_mentions = reddit[0]['mention'] if reddit else 0
-
-        twitter = social_data.get('twitter', [])
-        t_score = twitter[0]['score'] if twitter else 0
-        t_mentions = twitter[0]['mention'] if twitter else 0
-
-        norm_reddit = (r_score + 1) * 50
-        norm_twitter = (t_score + 1) * 50
-        total_mentions = r_mentions + t_mentions
+        bull_pow = 0
+        bear_pow = 0
         
-        if total_mentions >= 100:
-            final_score = (norm_reddit * 0.4) + (norm_twitter * 0.6)
-        elif total_mentions >= 20:
-            final_score = (norm_reddit * 0.5) + (norm_twitter * 0.5)
-        else:
-            final_score = 50 
+        bull_cnt = 0
+        bear_cnt = 0
+        neut_cnt = 0
 
-        return final_score, f"Mentions: {total_mentions}"
+        for item in headlines:
+            sentiment = item.get('sentiment', '').lower()
+            score = item.get('score', 0)
+            
+            if "bullish" in sentiment:
+                bull_pow += score
+                bull_cnt += 1
+            elif "bearish" in sentiment:
+                bear_pow += score
+                bear_cnt += 1
+            else:
+                neut_cnt += 1
+        
+        total_power = bull_pow + bear_pow
+        if total_power == 0:
+            final_score = 50
+        else:
+            final_score = (bull_pow / total_power) * 100
+
+        if final_score > 60: summary = f"Bullish Bias driven by {bull_cnt} positive signals"
+        elif final_score < 40: summary = f"Bearish Bias driven by {bear_cnt} negative signals"
+        else: summary = "Mixed / Neutral Sentiment"
+
+        return final_score, {
+            "summary": summary, 
+            "details": headlines,
+            "counts": {"bull": bull_cnt, "bear": bear_cnt, "neut": neut_cnt}
+        }
 
     def calculate_derivative(self, data):
         if not data.get('valid'): return 50, "No Data"
-        
         pcr = data.get('pcr', 0)
-        short_float = data.get('short_float', 0) * 100 
-        
-        if pcr < 0.7: pcr_score = 80
-        elif pcr < 1.0: pcr_score = 60
-        else: pcr_score = 40 
-        
-        if short_float < 5: si_score = 90
-        elif short_float < 15: si_score = 60
-        else: si_score = 30
-        
-        final_score = (pcr_score * 0.6) + (si_score * 0.4)
-        meta = f"PCR: {pcr:.2f} | Short Float: {short_float:.2f}%"
-        return final_score, meta
+        short = data.get('short_float', 0) * 100
+        pcr_score = 80 if pcr < 0.7 else 40
+        short_score = 70 if short < 5 else 30
+        return (pcr_score * 0.6) + (short_score * 0.4), f"PCR: {pcr:.2f} | Short: {short:.1f}%"
 
     def calculate_fundamental(self, info):
         pe = info.get('trailingPE', 0)
-        
-        if 15 <= pe <= 25: score = 90
-        elif pe < 5 or pe > 40: score = 30
-        else: score = 60
-        return score, pe
+        score = 85 if 0 < pe < 25 else 50
+        return score, f"PE Ratio: {pe:.2f}"

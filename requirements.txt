@@ -1,7 +1,9 @@
 streamlit
+plotly
 yfinance
-finnhub-python
 pandas
 ta
-plotly
-numpy
+requests
+beautifulsoup4
+groq
+python-dotenv

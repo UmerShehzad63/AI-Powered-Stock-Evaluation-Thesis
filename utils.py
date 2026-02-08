@@ -4,8 +4,8 @@ def normalize(value, min_val, max_val):
     return ((value - min_val) / (max_val - min_val)) * 100
 
 def get_rating(score):
-    if score >= 70: return "Strong Buy", "green"
-    if score >= 60: return "Buy", "lightgreen"
-    if score >= 40: return "Hold", "orange"
-    if score >= 30: return "Sell", "red"
-    return "Strong Sell", "darkred"
+    if score >= 80: return "Strong Bullish 🐂", "green"
+    if score >= 60: return "Bullish Bias 📈", "#00CC96"
+    if score >= 40: return "Neutral / Mixed 😐", "orange"
+    if score >= 20: return "Bearish Bias 📉", "#FF4B4B"
+    return "Strong Bearish 🐻", "darkred"
