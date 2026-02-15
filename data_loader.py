@@ -37,7 +37,7 @@ def convert_name_to_ticker(user_input):
     if " and " in clean_input.lower(): search_queries.append(clean_input.lower().replace(" and ", " & "))
     
     us_exchanges = ['NYQ', 'NMS', 'NGM', 'NCM', 'ASE', 'PCX']
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+    headers = {'User-Agent': 'Mozilla/5.0'}
     
     for query in search_queries:
         try:
@@ -49,7 +49,6 @@ def convert_name_to_ticker(user_input):
                     if quote.get('quoteType') == 'EQUITY' and quote.get('exchange') in us_exchanges:
                         return quote['symbol']
         except: continue
-    
     return clean_input.upper()
 
 class DataLoader:
@@ -70,6 +69,31 @@ class DataLoader:
             info = stock.info
             if 'regularMarketPrice' not in info and 'currentPrice' not in info:
                 return {}
+            
+            # --- FIXED: EXTRACT INSIDER PURCHASES & SALES ---
+            insider_buys = 0
+            insider_sells = 0
+            
+            try:
+                # Pull the actual transaction log
+                transactions = stock.insider_transactions
+                
+                if transactions is not None and not transactions.empty:
+                    # Iterate through every transaction row
+                    for index, row in transactions.iterrows():
+                        # Convert the whole row to text (avoids relying on fragile column names)
+                        row_text = str(row.values).lower()
+                        
+                        # Count explicit buys and sells (Ignores "Stock Gift" entries)
+                        if 'purchase' in row_text or 'buy' in row_text:
+                            insider_buys += 1
+                        elif 'sale' in row_text or 'sell' in row_text:
+                            insider_sells += 1
+            except:
+                pass # Fail silently if no insider data exists (e.g., ETFs)
+            
+            info['insider_buys'] = insider_buys
+            info['insider_sells'] = insider_sells
             return info
         except: return {}
 
@@ -88,16 +112,29 @@ class DataLoader:
                 random.seed(ticker)
                 short_float = random.uniform(0.01, 0.08)
             
+            short_ratio = info.get('shortRatio', 0) 
+            
             options_dates = stock.options
             if options_dates:
                 chain = stock.option_chain(options_dates[0])
                 calls_vol = chain.calls['volume'].sum()
                 puts_vol = chain.puts['volume'].sum()
-                pcr = puts_vol / calls_vol if calls_vol > 0 else 0
-            else: pcr = 0
+                pcr_vol = puts_vol / calls_vol if calls_vol > 0 else 0
+                
+                calls_oi = chain.calls['openInterest'].sum()
+                puts_oi = chain.puts['openInterest'].sum()
+                pcr_oi = puts_oi / calls_oi if calls_oi > 0 else 0
+                
+                avg_iv = (chain.calls['impliedVolatility'].mean() + chain.puts['impliedVolatility'].mean()) / 2
+            else: 
+                pcr_vol = pcr_oi = avg_iv = 0
 
-            return {"short_float": short_float, "pcr": pcr, "valid": True}
-        except: return {"valid": False}
+            return {
+                "short_float": short_float, "short_ratio": short_ratio,
+                "pcr_vol": pcr_vol, "pcr_oi": pcr_oi, "avg_iv": avg_iv, "valid": True
+            }
+        except Exception: 
+            return {"valid": False}
 
     def _get_source_name(self, url):
         try:
@@ -118,8 +155,7 @@ class DataLoader:
 
     def _scrape_finviz(self, ticker):
         url = f"https://finviz.com/quote.ashx?t={ticker}"
-        # Stronger User-Agent to prevent Streamlit Cloud from being blocked
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
+        headers = {'User-Agent': 'Mozilla/5.0'}
         try:
             response = requests.get(url, headers=headers, timeout=5)
             if response.status_code != 200: return []
@@ -134,9 +170,7 @@ class DataLoader:
                     link = a_tag['href']
                     if not link.startswith("http"):
                         link = "https://finviz.com/" + link.strip("/")
-                    
                     source_name = self._get_source_name(link)
-                    
                     headlines.append({
                         "title": a_tag.text.strip(),
                         "link": link,
@@ -148,11 +182,11 @@ class DataLoader:
 
     def get_social_sentiment(self, ticker):
         if not API_KEY_POOL:
-            return {"error": "API Keys Missing from Streamlit Secrets"}, "Error"
+            return {"error": "API Keys are missing! Add them to Streamlit Secrets."}, "Error"
 
         raw_news = self._scrape_finviz(ticker)
         if not raw_news:
-            return {"error": "No recent news found for this ticker on FinViz."}, "No Data"
+            return {"error": "FinViz returned 0 articles. It might be a bad ticker or a temporary block."}, "No Data"
 
         titles_only = [h['title'] for h in raw_news]
 
@@ -175,7 +209,6 @@ class DataLoader:
         for key in API_KEY_POOL:
             client = Groq(api_key=key)
             try:
-                # 1st Attempt: Large Model
                 completion = client.chat.completions.create(
                     model="llama-3.3-70b-versatile",
                     messages=[{"role": "user", "content": prompt}],
@@ -185,7 +218,6 @@ class DataLoader:
                 ai_response = json.loads(completion.choices[0].message.content)
             except Exception:
                 try:
-                    # 2nd Attempt: Fast Fallback Model (If 70b is busy)
                     completion = client.chat.completions.create(
                         model="llama-3.1-8b-instant",
                         messages=[{"role": "user", "content": prompt}],
@@ -193,8 +225,7 @@ class DataLoader:
                         response_format={"type": "json_object"}
                     )
                     ai_response = json.loads(completion.choices[0].message.content)
-                except:
-                    continue # Both failed, try next API key
+                except: continue 
             
             ai_results = ai_response.get("analysis", [])
             final_data = []
@@ -204,4 +235,4 @@ class DataLoader:
             
             return {"headlines": final_data}, "Real-Time AI"
         
-        return {"error": "AI Services are currently busy. Rate limits hit."}, "Error"
+        return {"error": "Groq AI Services are busy. Try again in 1 minute."}, "Error"
