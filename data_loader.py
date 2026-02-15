@@ -29,7 +29,6 @@ else:
 # --- SMART SEARCH HELPER ---
 def convert_name_to_ticker(user_input):
     clean_input = user_input.strip()
-    # If it's short and looks like a ticker, trust it first
     if len(clean_input) <= 5 and clean_input.isalpha() and clean_input.isupper():
         return clean_input
 
@@ -38,7 +37,7 @@ def convert_name_to_ticker(user_input):
     if " and " in clean_input.lower(): search_queries.append(clean_input.lower().replace(" and ", " & "))
     
     us_exchanges = ['NYQ', 'NMS', 'NGM', 'NCM', 'ASE', 'PCX']
-    headers = {'User-Agent': 'Mozilla/5.0'}
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
     
     for query in search_queries:
         try:
@@ -51,7 +50,6 @@ def convert_name_to_ticker(user_input):
                         return quote['symbol']
         except: continue
     
-    # Fallback: Just return the input upper-cased
     return clean_input.upper()
 
 class DataLoader:
@@ -62,7 +60,7 @@ class DataLoader:
         try:
             stock = yf.Ticker(ticker)
             df = stock.history(period="1y")
-            if df.empty: return None # Return None if invalid
+            if df.empty: return None 
             return df
         except: return None
 
@@ -70,7 +68,6 @@ class DataLoader:
         try:
             stock = yf.Ticker(ticker)
             info = stock.info
-            # Check if info is empty (invalid ticker)
             if 'regularMarketPrice' not in info and 'currentPrice' not in info:
                 return {}
             return info
@@ -121,9 +118,10 @@ class DataLoader:
 
     def _scrape_finviz(self, ticker):
         url = f"https://finviz.com/quote.ashx?t={ticker}"
-        headers = {'User-Agent': 'Mozilla/5.0'}
+        # Stronger User-Agent to prevent Streamlit Cloud from being blocked
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
         try:
-            response = requests.get(url, headers=headers, timeout=3)
+            response = requests.get(url, headers=headers, timeout=5)
             if response.status_code != 200: return []
             soup = BeautifulSoup(response.text, 'html.parser')
             news_table = soup.find(id='news-table')
@@ -150,11 +148,11 @@ class DataLoader:
 
     def get_social_sentiment(self, ticker):
         if not API_KEY_POOL:
-            return {"error": "Missing Keys"}, "Error"
+            return {"error": "API Keys Missing from Streamlit Secrets"}, "Error"
 
         raw_news = self._scrape_finviz(ticker)
         if not raw_news:
-            return {"error": "No News"}, "No Data"
+            return {"error": "No recent news found for this ticker on FinViz."}, "No Data"
 
         titles_only = [h['title'] for h in raw_news]
 
@@ -175,8 +173,9 @@ class DataLoader:
         """
 
         for key in API_KEY_POOL:
+            client = Groq(api_key=key)
             try:
-                client = Groq(api_key=key)
+                # 1st Attempt: Large Model
                 completion = client.chat.completions.create(
                     model="llama-3.3-70b-versatile",
                     messages=[{"role": "user", "content": prompt}],
@@ -184,14 +183,25 @@ class DataLoader:
                     response_format={"type": "json_object"}
                 )
                 ai_response = json.loads(completion.choices[0].message.content)
-                ai_results = ai_response.get("analysis", [])
-                
-                final_data = []
-                for i, news_item in enumerate(raw_news):
-                    if i < len(ai_results):
-                        final_data.append({**news_item, **ai_results[i]})
-                
-                return {"headlines": final_data}, "Real-Time AI"
-            except Exception: continue
+            except Exception:
+                try:
+                    # 2nd Attempt: Fast Fallback Model (If 70b is busy)
+                    completion = client.chat.completions.create(
+                        model="llama-3.1-8b-instant",
+                        messages=[{"role": "user", "content": prompt}],
+                        temperature=0,
+                        response_format={"type": "json_object"}
+                    )
+                    ai_response = json.loads(completion.choices[0].message.content)
+                except:
+                    continue # Both failed, try next API key
+            
+            ai_results = ai_response.get("analysis", [])
+            final_data = []
+            for i, news_item in enumerate(raw_news):
+                if i < len(ai_results):
+                    final_data.append({**news_item, **ai_results[i]})
+            
+            return {"headlines": final_data}, "Real-Time AI"
         
-        return {"error": "AI Busy"}, "Error"
+        return {"error": "AI Services are currently busy. Rate limits hit."}, "Error"

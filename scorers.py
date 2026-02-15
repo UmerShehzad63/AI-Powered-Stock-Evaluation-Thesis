@@ -19,6 +19,14 @@ class ScoringEngine:
         return final, {"RSI": rsi, "SMA": sma}
 
     def calculate_social(self, social_data):
+        # 1. SHOW THE ERROR IF IT FAILED
+        if "error" in social_data:
+            return 50, {
+                "summary": f"⚠️ {social_data['error']}", 
+                "details": [], 
+                "counts": {"bull":0,"bear":0,"neut":0}
+            }
+
         headlines = social_data.get('headlines', [])
         if not headlines:
             return 50, {"summary": "No relevant news", "details": [], "counts": {"bull":0,"bear":0,"neut":0}}
