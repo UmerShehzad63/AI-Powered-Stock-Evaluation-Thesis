@@ -3,7 +3,10 @@ from ta.trend import SMAIndicator, MACD, EMAIndicator
 from ta.volatility import BollingerBands
 
 class ScoringEngine:
-    
+    def __init__(self):
+        # Default trend state to anchor the derivative scorer later
+        self.current_tech_trend = True 
+
     def calculate_technical(self, df):
         if df.empty or len(df) < 50: return 50, {}
         
@@ -26,6 +29,7 @@ class ScoringEngine:
         bb_low = bb.bollinger_lband().iloc[-1]
         
         is_uptrend = price > sma_50
+        self.current_tech_trend = is_uptrend # Save trend state for derivative scorer
         
         if price > ema_20 > sma_50 > sma_200: trend_score = 100 
         elif price > sma_50 > sma_200: trend_score = 85         
@@ -84,15 +88,31 @@ class ScoringEngine:
         
         total_power = bull_pow + bear_pow
         final_score = 50 if total_power == 0 else (bull_pow / total_power) * 100
+        
         if final_score > 60: summary = f"Bullish Bias driven by {bull_cnt} positive signals"
         elif final_score < 40: summary = f"Bearish Bias driven by {bear_cnt} negative signals"
         else: summary = "Mixed / Neutral Sentiment"
+        
         return final_score, {"summary": summary, "details": headlines, "counts": {"bull": bull_cnt, "bear": bear_cnt, "neut": neut_cnt}}
 
     def calculate_derivative(self, data):
         if not data.get('valid'): return 50, {}
-        pcr_vol = data.get('pcr_vol', 0); pcr_oi = data.get('pcr_oi', 0); short_float = data.get('short_float', 0) * 100; short_ratio = data.get('short_ratio', 0); avg_iv = data.get('avg_iv', 0) * 100
+        pcr_vol = data.get('pcr_vol', 0)
+        pcr_oi = data.get('pcr_oi', 0)
+        short_float = data.get('short_float', 0) * 100
+        short_ratio = data.get('short_ratio', 0)
+        avg_iv = data.get('avg_iv', 0) * 100
         
+        # --- DERIVATIVE ANCHOR: Contextualizing Short Interest ---
+        if not self.current_tech_trend:
+            # If in a downtrend, high short float is a warning (Risk), not a squeeze opportunity
+            float_score = 15 if short_float > 10 else 50
+            ratio_score = 20 if short_ratio > 5 else 50
+        else:
+            # If in an uptrend, high short float is a "Squeeze Watch"
+            float_score = 85 if short_float < 3 else 30 if short_float > 15 else 55
+            ratio_score = 95 if short_ratio > 8 and short_float > 10 else 70 if short_ratio < 3 else 35
+
         if pcr_oi < 0.6: oi_score = 95
         elif pcr_oi < 0.9: oi_score = 75
         elif pcr_oi > 1.2: oi_score = 25
@@ -101,15 +121,6 @@ class ScoringEngine:
         if pcr_vol < 0.7: vol_score = 85
         elif pcr_vol > 1.1: vol_score = 35
         else: vol_score = 50
-        
-        if short_float < 3: float_score = 85
-        elif short_float > 15: float_score = 30
-        else: float_score = 55
-        
-        ratio_score = 50
-        if short_ratio > 8 and short_float > 10: ratio_score = 95 
-        elif short_ratio < 3: ratio_score = 70
-        elif short_ratio > 5: ratio_score = 35
 
         final_score = (oi_score * 0.40) + (vol_score * 0.20) + (float_score * 0.20) + (ratio_score * 0.20)
         return final_score, {"pcr_vol": pcr_vol, "pcr_oi": pcr_oi, "short_float": short_float, "short_ratio": short_ratio, "avg_iv": avg_iv}
@@ -117,6 +128,7 @@ class ScoringEngine:
     def calculate_fundamental(self, info):
         if not info: return 50, {}
 
+        sector = info.get('sector', 'Unknown')
         pe = info.get('trailingPE')
         pb = info.get('priceToBook')
         roe = info.get('returnOnEquity')
@@ -127,57 +139,67 @@ class ScoringEngine:
         insider_buys = info.get('insider_buys', 0)
         insider_sells = info.get('insider_sells', 0)
 
+        # --- DISTRESS DETECTION LOGIC ---
+        is_distressed = False
+        if (roe is not None and roe < 0) or (margins is not None and margins < 0):
+            is_distressed = True
+
+        slack = 1.5 if sector in ['Technology', 'Communication Services', 'Healthcare'] else 0.8 if sector in ['Utilities', 'Financial Services'] else 1.0
+
         val_score = 50
         if pe is not None:
-            if pe < 15: val_score = 100
-            elif pe < 25: val_score = 85
-            elif pe < 38: val_score = 70     
-            elif pe < 55: val_score = 45
+            adj_pe = pe / slack
+            if adj_pe < 15: val_score = 100
+            elif adj_pe < 25: val_score = 85
+            elif adj_pe < 38: val_score = 70     
+            elif adj_pe < 55: val_score = 45
             else: val_score = 25             
-        if pb is not None and pb > 25: val_score = max(10, val_score - 10) 
+            
+        if pb is not None:
+            if is_distressed and pb < 1.0:
+                val_score = 5  # VALUE TRAP PENALTY: Cheap P/B on a failing company is bad
+            elif pb > 10: 
+                val_score = max(5, val_score - 20)
 
         prof_score = 50
         if roe is not None:
             if roe > 0.50: prof_score = 100  
             elif roe > 0.25: prof_score = 85
-            elif roe > 0.15: prof_score = 70
             elif roe > 0: prof_score = 50
             else: prof_score = 20
-        if margins is not None:
-            if margins > 0.25: prof_score = min(100, prof_score + 15) 
-            elif margins < 0: prof_score = max(0, prof_score - 20)
+            
+        if margins is not None and margins > 0.25: 
+            prof_score = min(100, prof_score + 15) 
+            
+        if is_distressed:
+            prof_score = 10 # Massive penalty for structural unprofitability
 
         growth_score = 50
         if rev_growth is not None:
-            if rev_growth >= 0.50: growth_score = 100   
-            elif rev_growth >= 0.40: growth_score = 95  
-            elif rev_growth >= 0.30: growth_score = 90  
-            elif rev_growth >= 0.20: growth_score = 80  
+            if rev_growth >= 0.30: growth_score = 90  
             elif rev_growth >= 0.10: growth_score = 70  
-            elif rev_growth >= 0.05: growth_score = 60  
-            elif rev_growth >= 0.00: growth_score = 50  
-            elif rev_growth > -0.10: growth_score = 30  
-            else: growth_score = 10                     
+            elif rev_growth < 0: growth_score = 10 # Penalty for shrinking business
+            else: growth_score = 50                     
 
         health_score = 50
         if debt_eq is not None:
             if debt_eq < 40: health_score = 90
             elif debt_eq < 100: health_score = 75
-            elif debt_eq < 200: health_score = 50
-            else: health_score = 30
-            
-        if roe is not None and roe < -0.5 and margins is not None and margins > 0.15:
-            prof_score = 95   
-            health_score = 75
+            elif debt_eq > 200: health_score = 30
+            else: health_score = 50
 
         final_score = (val_score * 0.10) + (prof_score * 0.35) + (growth_score * 0.40) + (health_score * 0.15)
 
-        # --- 🔥 FIXED: FLEXIBLE CAPPED DYNAMIC BOOSTER (1.5x) ---
-        insider_booster = min(insider_buys * 1.5, 10)
+        # Dynamic Booster
+        booster = min(insider_buys * 1.5, 10)
+        if is_distressed and insider_sells > 20:
+            booster = 0 # Strip booster if the company is dying and insiders are dumping
 
         meta = {
+            **info,
             "PE": pe, "PB": pb, "ROE": roe, 
             "DebtEq": debt_eq, "RevGrowth": rev_growth, "Margins": margins,
-            "insider_buys": insider_buys, "insider_sells": insider_sells, "insider_booster": insider_booster
+            "insider_buys": insider_buys, "insider_sells": insider_sells, 
+            "insider_booster": booster, "is_distressed": is_distressed, "valuation_slack": slack
         }
         return final_score, meta

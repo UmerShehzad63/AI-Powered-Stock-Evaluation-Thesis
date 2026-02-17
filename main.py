@@ -60,11 +60,13 @@ if submit_button and user_input:
     else:
         status.info(f"🔄 Fetching Real-Time Analysis for {ticker}...")
         
+        # --- TECHNICALS FIRST (Anchors Derivatives) ---
+        score_tech, meta_tech = engine.calculate_technical(df_tech)
+        
         data_social, social_source = loader.get_social_sentiment(ticker)
         data_deriv = loader.get_derivative_data(ticker)
         data_fund = loader.get_fundamental_data(ticker)
 
-        score_tech, meta_tech = engine.calculate_technical(df_tech)
         score_social, meta_social_data = engine.calculate_social(data_social)
         score_deriv, meta_deriv = engine.calculate_derivative(data_deriv)
         score_fund, meta_fund = engine.calculate_fundamental(data_fund)
@@ -78,7 +80,7 @@ if submit_button and user_input:
             (score_deriv * weights['deriv'])
         )
         
-        # 🚀 APPLY DYNAMIC INSIDER BOOSTER
+        # APPLY DYNAMIC INSIDER BOOSTER
         insider_buys = meta_fund.get('insider_buys', 0)
         insider_sells = meta_fund.get('insider_sells', 0)
         insider_booster = meta_fund.get('insider_booster', 0)
@@ -98,14 +100,14 @@ if submit_button and user_input:
         with m2: st.markdown(f"""<div class="metric-card"><div class="metric-title">Signal Strength</div><div class="metric-value" style="color: {rating_color};">{rating_text}</div></div>""", unsafe_allow_html=True)
         with m3: st.markdown(f"""<div class="metric-card"><div class="metric-title">Current Price</div><div class="metric-value">${df_tech['Close'].iloc[-1]:.2f}</div></div>""", unsafe_allow_html=True)
 
-        # 2. 🔥 THE INSIDER UI BANNER (At the top, showing Buys & Sells)
-        if insider_buys > 10:  # UPDATED THRESHOLD HERE: More than 10 buys is Massive
+        # 2. INSIDER UI BANNER
+        if insider_buys > 10:  
             emoji = "🔥"
-            title = f"Massive Insider Cluster Buying! (+{insider_booster} Points)"
+            title = f"Massive Insider Cluster Buying! (+{insider_booster:.1f} Points)"
             color = "#00CC96"
-        elif insider_buys > 0: # 1 to 10 buys is Minor
+        elif insider_buys > 0: 
             emoji = "👀"
-            title = f"Minor Insider Buying Detected (+{insider_booster} Points)"
+            title = f"Minor Insider Buying Detected (+{insider_booster:.1f} Points)"
             color = "#3783FF"
         else:
             emoji = "👔"
@@ -216,7 +218,7 @@ if submit_button and user_input:
                     st.markdown(f"<div class='data-label'>Implied Volatility (IV)</div><div class='data-val'>{fmt_pct(iv)}</div>", unsafe_allow_html=True)
                 with dc2: 
                     st.markdown(f"<div class='data-label'>Open Interest P/C Ratio</div><div class='data-val'>{fmt_num(pcr_o)}</div>", unsafe_allow_html=True)
-                    squeeze_tag = "🔥 Squeeze Watch" if s_ratio > 8 and s_float > 10 else ""
+                    squeeze_tag = "🔥 Squeeze Watch" if s_ratio > 8 and s_float > 10 and meta_tech.get('Trend') else ""
                     st.markdown(f"<div class='data-label'>Days to Cover</div><div class='data-val'>{fmt_num(s_ratio)} <span style='color:#FF4B4B; font-size:0.8em;'>{squeeze_tag}</span></div>", unsafe_allow_html=True)
                     iv_status = "High Volatility Expected" if iv > 50 else "Normal Volatility"
                     st.markdown(f"<div class='data-label'>Market Expectation</div><div class='data-val'>{iv_status}</div>", unsafe_allow_html=True)
@@ -225,7 +227,10 @@ if submit_button and user_input:
 
             # --- FUNDAMENTALS ---
             with st.container(border=True):
-                st.markdown(f"**🏢 Fundamentals** (Score: {score_fund:.0f})")
+                if meta_fund.get('is_distressed'):
+                    st.markdown(f"**🏢 Fundamentals** (Score: {score_fund:.0f}) ⚠️ **DISTRESSED ASSET**")
+                else:
+                    st.markdown(f"**🏢 Fundamentals** (Score: {score_fund:.0f})")
                 st.progress(int(score_fund))
                 
                 def fmt_fpct(val): return f"{val*100:.1f}%" if val is not None else "N/A"
