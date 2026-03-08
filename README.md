@@ -3,7 +3,7 @@
 
 A multi-factor stock scoring system that combines fundamental analysis, AI-driven news sentiment, technical indicators, and derivatives data into a single composite score (0–100). Built with Python and Streamlit.
 
-🔗 **Live Demo:** [Streamlit App](https://ai-powered-stock-evaluationthesis-ruzyhesqgcebmn2syfzsdb.streamlit.app/)
+🔗 **Live Demo:** [Streamlit App](https://ai-powered-stock-evaluationthesis-um6.streamlit.app/)
 
 ---
 
