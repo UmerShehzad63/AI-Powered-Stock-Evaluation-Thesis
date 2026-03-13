@@ -1,9 +1,7 @@
 import streamlit as st
-import plotly.graph_objects as go
 from data_loader import DataLoader, convert_name_to_ticker
 from scorers import ScoringEngine
 from utils import get_rating
-from ta.volatility import BollingerBands
 
 st.set_page_config(page_title="Thesis Prototype", layout="wide", page_icon="📈")
 
@@ -88,16 +86,7 @@ if submit_button and user_input:
         insider_buys    = meta_fund.get('insider_buys', 0)
         insider_sells   = meta_fund.get('insider_sells', 0)
         insider_booster = meta_fund.get('insider_booster', 0)
-        composite_raw   = min(100, base_composite + insider_booster)
-
-        # Stretch composite away from centre
-        if composite_raw >= 72:
-            composite = 72 + (composite_raw - 72) * 1.4
-        elif composite_raw <= 32:
-            composite = 32 - (32 - composite_raw) * 1.4
-        else:
-            composite = composite_raw
-        composite = round(max(0, min(100, composite)), 1)
+        composite       = min(100, base_composite + insider_booster)
 
         rating_text, rating_color = get_rating(composite)
         status.empty()
@@ -289,8 +278,6 @@ if submit_button and user_input:
                 if sig_html:
                     st.markdown(f"<div style='margin-top:10px;'>{sig_html}</div>", unsafe_allow_html=True)
 
-                st.markdown(f"""<div class="ext-link">👉 <a href="https://www.tradingview.com/chart/?symbol={ticker}" target="_blank">View Advanced Charts</a></div>""", unsafe_allow_html=True)
-
             # ── Derivatives ──
             with st.container(border=True):
                 st.markdown(f"**📉 Derivatives & Options** (Score: {score_deriv:.0f})")
@@ -324,20 +311,126 @@ if submit_button and user_input:
             if not df_tech.empty:
                 st.subheader("Price Action & Indicators")
 
-                bb = BollingerBands(df_tech['Close'])
-                df_tech['bb_high'] = bb.bollinger_hband()
-                df_tech['bb_low']  = bb.bollinger_lband()
+                from ta.volatility import BollingerBands as BB
+                import streamlit.components.v1 as components
+                import json
+
+                bb_ind   = BB(df_tech['Close'])
+                df_tech['bb_high'] = bb_ind.bollinger_hband()
+                df_tech['bb_low']  = bb_ind.bollinger_lband()
                 df_tech['sma_50']  = df_tech['Close'].rolling(50).mean()
                 df_tech['sma_200'] = df_tech['Close'].rolling(min(200, len(df_tech))).mean()
 
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(x=df_tech.index, y=df_tech['bb_low'],  line=dict(color='rgba(255,255,255,0.1)', width=1), name='Lower BB'))
-                fig.add_trace(go.Scatter(x=df_tech.index, y=df_tech['bb_high'], line=dict(color='rgba(255,255,255,0.1)', width=1), name='Upper BB', fill='tonexty', fillcolor='rgba(255,255,255,0.05)'))
-                fig.add_trace(go.Scatter(x=df_tech.index, y=df_tech['sma_50'],  line=dict(color='#3783FF', width=1.5), name='SMA 50'))
-                fig.add_trace(go.Scatter(x=df_tech.index, y=df_tech['sma_200'], line=dict(color='#FF4B4B', width=1.5, dash='dash'), name='SMA 200'))
-                fig.add_trace(go.Candlestick(x=df_tech.index, open=df_tech['Open'], high=df_tech['High'], low=df_tech['Low'], close=df_tech['Close'], name='Price'))
+                # Build data arrays for Lightweight Charts
+                def to_ts(idx):
+                    return int(idx.timestamp())
 
-                fig.update_layout(height=500, margin=dict(t=0, b=0, l=0, r=0),
-                                  xaxis_rangeslider_visible=False, template="plotly_dark",
-                                  plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)')
-                st.plotly_chart(fig, use_container_width=True)
+                candles = [
+                    {"time": to_ts(row.Index), "open": round(float(row.Open), 4),
+                     "high": round(float(row.High), 4), "low": round(float(row.Low), 4),
+                     "close": round(float(row.Close), 4)}
+                    for row in df_tech.itertuples() if not (
+                        hasattr(row, 'Open') and str(row.Open) == 'nan'
+                    )
+                ]
+
+                def line_data(col):
+                    return [
+                        {"time": to_ts(idx), "value": round(float(v), 4)}
+                        for idx, v in df_tech[col].items()
+                        if str(v) != 'nan'
+                    ]
+
+                sma50_data  = line_data('sma_50')
+                sma200_data = line_data('sma_200')
+                bb_hi_data  = line_data('bb_high')
+                bb_lo_data  = line_data('bb_low')
+
+                candles_json  = json.dumps(candles)
+                sma50_json    = json.dumps(sma50_data)
+                sma200_json   = json.dumps(sma200_data)
+                bb_hi_json    = json.dumps(bb_hi_data)
+                bb_lo_json    = json.dumps(bb_lo_data)
+
+                chart_html = f"""
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<style>
+  * {{ margin:0; padding:0; box-sizing:border-box; }}
+  body {{ background:#0e1117; }}
+  #chart {{ width:100%; height:500px; }}
+  #legend {{
+    position:absolute; top:8px; left:8px; z-index:10;
+    display:flex; gap:14px; flex-wrap:wrap;
+    font-family:sans-serif; font-size:12px; color:#aaa;
+    background:rgba(14,17,23,0.7); padding:4px 10px; border-radius:6px;
+  }}
+  .leg {{ display:flex; align-items:center; gap:5px; }}
+  .dot {{ width:14px; height:3px; border-radius:2px; }}
+</style>
+</head>
+<body>
+<div style="position:relative;">
+  <div id="legend">
+    <div class="leg"><div class="dot" style="background:#26a69a;"></div>Price</div>
+    <div class="leg"><div class="dot" style="background:#3783FF;"></div>SMA 50</div>
+    <div class="leg"><div class="dot" style="background:#FF4B4B; border-top:2px dashed #FF4B4B; height:0;"></div>SMA 200</div>
+    <div class="leg"><div class="dot" style="background:rgba(255,255,255,0.25);"></div>BB Band</div>
+  </div>
+  <div id="chart"></div>
+</div>
+<script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
+<script>
+  const chart = LightweightCharts.createChart(document.getElementById('chart'), {{
+    width:  document.getElementById('chart').clientWidth,
+    height: 500,
+    layout: {{ background: {{ color: '#0e1117' }}, textColor: '#aaa' }},
+    grid:   {{ vertLines: {{ color: 'rgba(255,255,255,0.04)' }}, horzLines: {{ color: 'rgba(255,255,255,0.04)' }} }},
+    crosshair: {{ mode: LightweightCharts.CrosshairMode.Normal }},
+    rightPriceScale: {{ borderColor: 'rgba(255,255,255,0.1)' }},
+    timeScale: {{ borderColor: 'rgba(255,255,255,0.1)', timeVisible: true, secondsVisible: false }},
+    handleScroll:  {{ mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true }},
+    handleScale:   {{ mouseWheel: true, pinch: true, axisPressedMouseMove: true }},
+  }});
+
+  // Candlesticks
+  const cSeries = chart.addCandlestickSeries({{
+    upColor: '#26a69a', downColor: '#ef5350',
+    borderUpColor: '#26a69a', borderDownColor: '#ef5350',
+    wickUpColor: '#26a69a', wickDownColor: '#ef5350',
+  }});
+  cSeries.setData({candles_json});
+
+  // BB upper
+  const bbHi = chart.addLineSeries({{ color: 'rgba(255,255,255,0.18)', lineWidth: 1, priceLineVisible: false, lastValueVisible: false }});
+  bbHi.setData({bb_hi_json});
+
+  // BB lower (filled)
+  const bbLo = chart.addLineSeries({{ color: 'rgba(255,255,255,0.18)', lineWidth: 1, priceLineVisible: false, lastValueVisible: false }});
+  bbLo.setData({bb_lo_json});
+
+  // SMA 50
+  const sma50 = chart.addLineSeries({{ color: '#3783FF', lineWidth: 1.5, priceLineVisible: false, lastValueVisible: false }});
+  sma50.setData({sma50_json});
+
+  // SMA 200
+  const sma200 = chart.addLineSeries({{ color: '#FF4B4B', lineWidth: 1.5, lineStyle: LightweightCharts.LineStyle.Dashed, priceLineVisible: false, lastValueVisible: false }});
+  sma200.setData({sma200_json});
+
+  chart.timeScale().fitContent();
+
+  window.addEventListener('resize', () => {{
+    chart.applyOptions({{ width: document.getElementById('chart').clientWidth }});
+  }});
+</script>
+</body>
+</html>
+"""
+                components.html(chart_html, height=510, scrolling=False)
+
+                st.markdown(f"""
+                <div style="text-align:right; margin-top:6px;">
+                    👉 <a href="https://www.tradingview.com/chart/?symbol={ticker}" target="_blank" style="color:#3783FF; font-weight:600; font-size:0.9em;">View Advanced Charts on TradingView ↗</a>
+                </div>""", unsafe_allow_html=True)
