@@ -91,7 +91,31 @@ if submit_button and user_input:
         rating_text, rating_color = get_rating(composite)
         status.empty()
 
-        st.markdown(f"<h3 style='text-align:center;'>Analysis for: {ticker}</h3>", unsafe_allow_html=True)
+        company_name = meta_fund.get('longName') or meta_fund.get('shortName') or ticker
+        sector       = meta_fund.get('sector', '')
+        industry     = meta_fund.get('industry', '')
+
+        st.markdown(f"<h3 style='text-align:center;'>{ticker} &nbsp;<span style='color:#aaa;font-weight:400;font-size:0.75em;'>({company_name})</span></h3>", unsafe_allow_html=True)
+        if sector or industry:
+            st.markdown(f"<p style='text-align:center;color:#666;font-size:0.82em;margin-top:-10px;'>{sector}{' · ' + industry if industry else ''}</p>", unsafe_allow_html=True)
+
+        # ── Competitors strip ──
+        competitors = loader.get_competitors(ticker, company_name, sector, industry)
+        if competitors:
+            chips_html = ''.join([
+                f'<a href="?ticker={c["ticker"]}" style="display:inline-block;background:#1a1d24;border:1px solid #2e3240;'
+                f'border-radius:20px;padding:4px 12px;margin:3px;font-size:0.78em;color:#aaa;text-decoration:none;'
+                f'cursor:pointer;" title="{c.get("name","")}">'
+                f'<span style="color:#3783FF;font-weight:600;">{c["ticker"]}</span>'
+                f'&nbsp;<span style="color:#666;">{c.get("name","")}</span></a>'
+                for c in competitors
+            ])
+            st.markdown(
+                f'<div style="text-align:center;margin:4px 0 12px 0;">'
+                f'<span style="font-size:0.72em;color:#555;text-transform:uppercase;letter-spacing:0.06em;margin-right:8px;">Competitors</span>'
+                f'{chips_html}</div>',
+                unsafe_allow_html=True
+            )
         st.markdown("---")
 
         # ── Top metrics ──
